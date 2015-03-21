@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2004 Steve Harris
+ *  Copyright (C) 2014 Steve Harris et al. (see AUTHORS)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as
@@ -17,7 +17,7 @@
 #include "lo_types_internal.h"
 #include "lo/lo.h"
 
-#ifdef USE_ANSI_C
+#if defined(USE_ANSI_C) || defined(DLL_EXPORT)
 lo_timetag lo_get_tt_immediate()
 {
     lo_timetag tt = { 0U, 1U };

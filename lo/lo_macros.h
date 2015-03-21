@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2004 Steve Harris
+ *  Copyright (C) 2014 Steve Harris et al. (see AUTHORS)
  *
  *  This program is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public License
@@ -23,9 +23,19 @@
 extern "C" {
 #endif
 
-/* \brief Maximum length of UDP messages in bytes
+/* \brief Left for backward-compatibility.  See
+ * LO_DEFAULT_MAX_MSG_SIZE below, and lo_server_max_msg_size().
  */
 #define LO_MAX_MSG_SIZE 32768
+
+/* \brief Maximum length of incoming UDP messages in bytes.
+ */
+#define LO_MAX_UDP_MSG_SIZE 65535
+
+/* \brief Default maximum length of incoming messages in bytes,
+ * corresponds to max UDP message size.
+ */
+#define LO_DEFAULT_MAX_MSG_SIZE LO_MAX_UDP_MSG_SIZE
 
 /* \brief A set of macros to represent different communications transports
  */
@@ -36,13 +46,8 @@ extern "C" {
 
 /* an internal value, ignored in transmission but check against LO_MARKER in the
  * argument list. Used to do primitive bounds checking */
-#ifdef __LP64__
-#	define LO_MARKER_A (void *)0xdeadbeefdeadbeef
-#	define LO_MARKER_B (void *)0xf00baa23f00baa23
-#else /*__LP64__*/  
-#	define LO_MARKER_A (void *)0xdeadbeef
-#	define LO_MARKER_B (void *)0xf00baa23
-#endif
+#	define LO_MARKER_A (void *)0xdeadbeefdeadbeefLLU
+#	define LO_MARKER_B (void *)0xf00baa23f00baa23LLU
 
 #define LO_ARGS_END LO_MARKER_A, LO_MARKER_B
 
@@ -55,13 +60,7 @@ extern "C" {
 #endif
 #endif
 
-#ifdef DLL_EXPORT
-#ifndef USE_ANSI_C
-#define USE_ANSI_C
-#endif
-#endif
-
-#ifdef USE_ANSI_C
+#if defined(USE_ANSI_C) || defined(DLL_EXPORT)
 
 /* In non-GCC compilers, there is no support for variable-argument
  * macros, so provide "internal" vararg functions directly instead. */

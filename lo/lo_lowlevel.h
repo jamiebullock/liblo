@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2004 Steve Harris
+ *  Copyright (C) 2014 Steve Harris et al. (see AUTHORS)
  *
  *  This program is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public License
@@ -108,6 +108,21 @@ int lo_send_bundle_from(lo_address targ, lo_server serv, lo_bundle b);
  * \brief Create a new lo_message object
  */
 lo_message lo_message_new();
+
+/**
+ * \brief  Add one to a message's reference count.
+ *
+ * Messages are reference counted. If a message is multiply referenced,
+ * the message's counter should be incremented. It is automatically
+ * decremented by lo_message_free lo_message_free_recursive, with
+ * lo_message_free_recursive being the preferable method.
+ */
+void lo_message_incref(lo_message m);
+
+/**
+ * \brief Create a new lo_message object by cloning an already existing one
+ */
+lo_message lo_message_clone(lo_message m);
 
 /**
  * \brief Free memory allocated by lo_message_new() and any subsequent
@@ -448,6 +463,23 @@ int lo_address_set_iface(lo_address t, const char *iface, const char *ip);
 const char* lo_address_get_iface(lo_address t);
 
 /**
+ * \brief Set the TCP_NODELAY flag on outgoing TCP connections.
+ * \param t The address to set this flag for.
+ * \param enable Non-zero to set the flag, zero to unset it.
+ * \return the previous value of this flag.
+ */
+int lo_address_set_tcp_nodelay(lo_address t, int enable);
+
+/**
+ * \brief Set outgoing stream connections (e.g., TCP) to be
+ *        transmitted using the SLIP packetizing protocol.
+ * \param t The address to set this flag for.
+ * \param enable Non-zero to set the flag, zero to unset it.
+ * \return the previous value of this flag.
+ */
+int lo_address_set_stream_slip(lo_address t, int enable);
+
+/**
  * \brief  Create a new bundle object.
  *
  * OSC Bundles encapsulate one or more OSC messages and may include a timestamp
@@ -460,6 +492,16 @@ const char* lo_address_get_iface(lo_address t);
 lo_bundle lo_bundle_new(lo_timetag tt);
 
 /**
+ * \brief  Add one to a bundle's reference count.
+ *
+ * Bundles are reference counted. If a bundle is multiply referenced,
+ * the bundle's counter should be incremented. It is automatically
+ * decremented by lo_bundle_free lo_bundle_free_recursive, with
+ * lo_bundle_free_recursive being the preferable method.
+ */
+void lo_bundle_incref(lo_bundle b);
+
+/**
  * \brief  Adds an OSC message to an existing bundle.
  *
  * The message passed is appended to the list of messages in the bundle to be
@@ -470,20 +512,48 @@ lo_bundle lo_bundle_new(lo_timetag tt);
 int lo_bundle_add_message(lo_bundle b, const char *path, lo_message m);
 
 /**
+ * \brief  Adds an OSC bundle to an existing bundle.
+ *
+ * The child bundle passed is appended to the list of child bundles|messages in the parent bundle to be
+ * dispatched.
+ *
+ * \return 0 if successful, less than 0 otherwise.
+ */
+int lo_bundle_add_bundle(lo_bundle b, lo_bundle n);
+
+/**
  * \brief  Return the length of a bundle in bytes.
  *
- * Includes the marker and typetage length.
+ * Includes the marker and typetag length.
  *
  * \param b The bundle to be sized
  */
 size_t lo_bundle_length(lo_bundle b);
 
 /**
- * \brief  Return the number of messages in a bundle.
+ * \brief  Return the number of top-level elements in a bundle.
  *
  * \param b The bundle to be counted.
  */
 unsigned int lo_bundle_count(lo_bundle b);
+
+/**
+ * \brief  Gets the element type contained within a bundle.
+ *
+ * Returns a lo_element_type at a given index within a bundle.
+
+ * \return The requested lo_element_type if successful, otherwise 0.
+ */
+lo_element_type lo_bundle_get_type(lo_bundle b, int index);
+
+/**
+ * \brief  Gets a nested bundle contained within a bundle.
+ *
+ * Returns a lo_bundle at a given index within a bundle.
+ *
+ * \return The requested lo_bundle if successful, otherwise 0.
+ */
+lo_bundle lo_bundle_get_bundle(lo_bundle b, int index);
 
 /**
  * \brief  Gets a message contained within a bundle.
@@ -495,6 +565,15 @@ unsigned int lo_bundle_count(lo_bundle b);
  */
 lo_message lo_bundle_get_message(lo_bundle b, int index,
                                  const char **path);
+
+/**
+ * \brief  Get the timestamp associated with a bundle.
+ *
+ * \param b The bundle for which the timestamp should be returned.
+ *
+ * \return The timestamp of the bundle as a lo_timetag.
+ */
+lo_timetag lo_bundle_get_timestamp(lo_bundle b);
 
 /**
  * \brief  Serialise the bundle object to an area of memory and return a
@@ -519,9 +598,16 @@ void *lo_bundle_serialise(lo_bundle b, void *to, size_t *size);
 void lo_bundle_free(lo_bundle b);
 
 /**
- * \brief  Frees the memory taken by a bundle object and messages in the bundle.
+ * \brief  Frees the memory taken by a bundle object and its messages and nested bundles recursively.
  *
- * \param b The bundle, which may contain messages, to be freed.
+ * \param b The bundle, which may contain messages and nested bundles, to be freed.
+*/
+void lo_bundle_free_recursive(lo_bundle b);
+
+/**
+ * \brief  Obsolete, use lo_bundle_free_recursive instead.
+ *
+ * \param b The bundle, which may contain messages and nested bundles, to be freed.
 */
 void lo_bundle_free_messages(lo_bundle b);
 
@@ -638,6 +724,27 @@ lo_server lo_server_new_multicast(const char *group, const char *port,
 lo_server lo_server_new_multicast_iface(const char *group, const char *port,
                                         const char *iface, const char *ip,
                                         lo_err_handler err_h);
+
+/**
+ * \brief Create a new server instance, taking port and the optional
+ * multicast group IP from an URL string.
+ * 
+ * \param url The URL to specify the server parameters.
+ * \param err_h An error callback function that will be called if there is an
+ * error in messge reception or server creation. Pass NULL if you do not want
+ * error handling.
+ * \return A new lo_server instance.
+ */
+lo_server lo_server_new_from_url(const char *url,
+                                 lo_err_handler err_h);
+
+/**
+ * \brief Enables or disables type coercion during message dispatch.
+ * \param server The server to toggle this option for.
+ * \param enable Non-zero to enable, or zero to disable type coercion.
+ * \return The previous value of this option.
+ */
+int lo_server_enable_coercion(lo_server server, int enable);
 
 /**
  * \brief Free up memory used by the lo_server object
@@ -791,6 +898,26 @@ int lo_server_events_pending(lo_server s);
  * If the delay is greater than 100 seconds then it will return 100.0.
  */
 double lo_server_next_event_delay(lo_server s);
+
+/** 
+ * \brief Set the maximum message size accepted by a server.
+ *
+ * For UDP servers, the maximum message size cannot exceed 64k, due to
+ * the UDP transport specifications.  For TCP servers, this number may
+ * be larger, but be aware that one or more contiguous blocks of
+ * memory of this size may be allocated by liblo.  (At least one per
+ * connection.)
+ *
+ * \param s The server on which to operate.
+ * \param req_size The new maximum message size to request, 0 if it
+ * should not be modified, or -1 if it should be set to unlimited.
+ * Note that an unlimited message buffer may make your application
+ * open to a denial of service attack.
+ * \return The new maximum message size is returned, which may or may
+ * not be equal to req_size.  If -1 is returned, maximum size is
+ * unlimited.
+ */
+int lo_server_max_msg_size(lo_server s, int req_size);
 
 /**
  * \brief Return the protocol portion of an OSC URL, eg. udp, tcp.
@@ -956,11 +1083,7 @@ void lo_method_pp(lo_method m);
  * to all field names. */
 void lo_method_pp_prefix(lo_method m, const char *p);
 
-#ifdef ENABLE_THREADS
-/** \brief Pretty-print a lo_server_thread object. */
-void lo_server_thread_pp(lo_server_thread st);
 /** @} */
-#endif
 
 #ifdef __cplusplus
 }

@@ -20,6 +20,7 @@
 #else
 #define closesocket close
 #include <netdb.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #endif
 
@@ -36,6 +37,25 @@ typedef __int32 int32_t;
 #endif
 
 #include "lo/lo_osc_types.h"
+
+#define LO_HOST_SIZE 1024
+
+/** \brief Bitflags for optional protocol features, set by
+ *         lo_address_set_flags(). */
+typedef enum {
+    LO_SLIP=0x01,     /*!< SLIP decoding */
+    LO_NODELAY=0x02,  /*!< Set the TCP_NODELAY socket option. */
+} lo_proto_flags;
+
+/** \brief Bitflags for optional server features. */
+typedef enum {
+    LO_SERVER_COERCE=0x01,     /*!< whether or not to coerce args
+                                * during dispatch */
+    LO_SERVER_ENQUEUE=0x02,    /*!< whether or not to enqueue early
+                                * messages */
+} lo_server_flags;
+
+#define LO_SERVER_DEFAULT_FLAGS (LO_SERVER_COERCE | LO_SERVER_ENQUEUE)
 
 typedef void (*lo_err_handler) (int num, const char *msg,
                                 const char *path);
@@ -64,6 +84,10 @@ typedef struct _lo_address {
     const char *errstr;
     int ttl;
     struct _lo_inaddr addr;
+    struct _lo_server *source_server;
+    const char *source_path; /* does not need to be freed since it
+                              * will always point to stack memory in
+                              * dispatch_method() */
 } *lo_address;
 
 typedef struct _lo_blob {
@@ -82,6 +106,7 @@ typedef struct _lo_message {
     lo_arg **argv;
     /* timestamp from bundle (LO_TT_IMMEDIATE for unbundled messages) */
     lo_timetag ts;
+    int refcount;
 } *lo_message;
 
 typedef int (*lo_method_handler) (const char *path, const char *types,
@@ -100,6 +125,15 @@ typedef struct _lo_method {
     struct _lo_method *next;
 } *lo_method;
 
+struct socket_context {
+    char *buffer;
+    size_t buffer_size;
+    unsigned int buffer_msg_offset;
+    unsigned int buffer_read_offset;
+    int is_slip;                        //<! 1 if slip mode, 0 otherwise, -1 for unknown
+    int slip_state;                     //<! state variable for slip decoding
+};
+
 typedef struct _lo_server {
     struct addrinfo *ai;
     lo_method first;
@@ -108,8 +142,8 @@ typedef struct _lo_server {
     char *hostname;
     char *path;
     int protocol;
+    lo_server_flags flags;
     void *queued;
-    int queue_enabled;
     struct sockaddr_storage addr;
     socklen_t addr_len;
     int sockets_len;
@@ -121,12 +155,20 @@ typedef struct _lo_server {
         int fd;
     } *sockets;
 #endif
+
+    // Some extra data needed per open socket.  Note that we don't put
+    // it in the socket struct, because that layout is needed for
+    // passing in the list of sockets to poll().
+    struct socket_context *contexts;
+
     struct _lo_address *sources;
     int sources_len;
     lo_bundle_start_handler bundle_start_handler;
     lo_bundle_end_handler bundle_end_handler;
     void *bundle_handler_user_data;
     struct _lo_inaddr addr_if;
+    void *error_user_data;
+    int max_msg_size;
 } *lo_server;
 
 #ifdef ENABLE_THREADS
@@ -140,13 +182,26 @@ typedef struct _lo_server_thread {
 typedef void *lo_server_thread;
 #endif
 
-typedef struct _lo_bundle {
+typedef struct _lo_bundle *lo_bundle;
+
+typedef struct _lo_element {
+	lo_element_type type;
+	union {
+		lo_bundle bundle;
+		struct {
+			lo_message msg;
+			const char *path;
+		} message;
+	} content;
+} lo_element;
+
+struct _lo_bundle {
     size_t size;
     size_t len;
     lo_timetag ts;
-    lo_message *msgs;
-    char **paths;
-} *lo_bundle;
+    lo_element *elmnts;
+    int refcount;
+};
 
 typedef struct _lo_strlist {
     char *str;

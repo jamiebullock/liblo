@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2004 (See AUTHORS file)
+ *  Copyright (C) 2014 Steve Harris et al. (see AUTHORS)
  *
  *  This program is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public License
@@ -22,7 +22,7 @@ extern "C" {
 #endif
 
 /**
- * \file lo.h The liblo main headerfile and high-level API functions.
+ * \file lo_serverthread.h The liblo headerfile declaring thread-related functions.
  */
 
 
@@ -81,6 +81,19 @@ lo_server_thread lo_server_thread_new_multicast(const char *group, const char *p
  */
 lo_server_thread lo_server_thread_new_with_proto(const char *port, int proto,
 				   lo_err_handler err_h);
+
+/**
+ * \brief Create a new server thread, taking port and the optional
+ * multicast group IP from an URL string.
+ * 
+ * \param url The URL to specify the server parameters.
+ * \param err_h An error callback function that will be called if there is an
+ * error in messge reception or server creation. Pass NULL if you do not want
+ * error handling.
+ * \return A new lo_server_thread instance.
+ */
+lo_server_thread lo_server_thread_new_from_url(const char *url,
+                                               lo_err_handler err_h);
 
 /**
  * \brief Free memory taken by a server thread
@@ -156,6 +169,11 @@ lo_server lo_server_thread_get_server(lo_server_thread st);
 /** \brief Return true if there are scheduled events (eg. from bundles) waiting
  * to be dispatched by the thread */
 int lo_server_thread_events_pending(lo_server_thread st);
+
+void lo_server_thread_set_error_context(lo_server_thread st, void *user_data);
+
+/** \brief Pretty-print a lo_server_thread object. */
+void lo_server_thread_pp(lo_server_thread st);
 
 #ifdef __cplusplus
 }

@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2004 Steve Harris, Uwe Koloska
+ *  Copyright (C) 2014 Steve Harris et al. (see AUTHORS)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as
@@ -20,7 +20,7 @@
 
 #include "lo/lo.h"
 
-const char testdata[5] = "ABCDE";
+const char testdata[6] = "ABCDE";
 
 int main(int argc, char *argv[])
 {

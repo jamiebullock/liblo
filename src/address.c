@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2004 Steve Harris
+ *  Copyright (C) 2014 Steve Harris et al. (see AUTHORS)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as
@@ -14,13 +14,15 @@
  *  $Id$
  */
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
-#include <netinet/tcp.h>
-
-#include "config.h"
 
 #if defined(WIN32) || defined(_MSC_VER)
 #include <io.h>
@@ -33,6 +35,7 @@
 #include <netdb.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <netinet/tcp.h>
 #ifdef HAVE_GETIFADDRS
 #include <ifaddrs.h>
 #endif
@@ -41,6 +44,9 @@
 #include "lo_types_internal.h"
 #include "lo_internal.h"
 #include "lo/lo.h"
+#include "lo/lo_throw.h"
+
+static void lo_address_set_flags(lo_address t, int flags);
 
 lo_address lo_address_new_with_proto(int proto, const char *host,
                                      const char *port)
@@ -83,6 +89,8 @@ lo_address lo_address_new_with_proto(int proto, const char *host,
     a->ttl = -1;
     a->addr.size = 0;
     a->addr.iface = 0;
+    a->source_server = 0;
+    a->source_path = 0;
 
     return a;
 }
@@ -132,11 +140,69 @@ lo_address lo_address_new_from_url(const char *url)
     return a;
 }
 
+static void lo_address_resolve_source(lo_address a)
+{
+    char hostname[LO_HOST_SIZE];
+    char portname[32];
+    int err;
+    lo_server s = a->source_server;
+
+    if (a->protocol == LO_UDP && s && s->addr_len > 0)
+    {
+        err = getnameinfo((struct sockaddr *) &s->addr, s->addr_len,
+                          hostname, sizeof(hostname),
+                          portname, sizeof(portname),
+                          NI_NUMERICHOST | NI_NUMERICSERV);
+        if (err) {
+            switch (err) {
+            case EAI_AGAIN:
+                lo_throw(s, err, "Try again", a->source_path);
+                break;
+            case EAI_BADFLAGS:
+                lo_throw(s, err, "Bad flags", a->source_path);
+                break;
+            case EAI_FAIL:
+                lo_throw(s, err, "Failed", a->source_path);
+                break;
+            case EAI_FAMILY:
+                lo_throw(s, err, "Cannot resolve address family",
+                         a->source_path);
+                break;
+            case EAI_MEMORY:
+                lo_throw(s, err, "Out of memory", a->source_path);
+                break;
+            case EAI_NONAME:
+                lo_throw(s, err, "Cannot resolve", a->source_path);
+                break;
+#if !defined(WIN32) && !defined(_MSC_VER)
+            case EAI_SYSTEM:
+                lo_throw(s, err, strerror(err), a->source_path);
+                break;
+#endif
+            default:
+                lo_throw(s, err, "Unknown error", a->source_path);
+                break;
+            }
+
+            return;
+        }
+
+        a->host = strdup(hostname);
+        a->port = strdup(portname);
+    } else {
+        a->host = strdup("");
+        a->port = strdup("");
+    }
+}
+
 const char *lo_address_get_hostname(lo_address a)
 {
     if (!a) {
         return NULL;
     }
+
+    if (!a->host)
+        lo_address_resolve_source(a);
 
     return a->host;
 }
@@ -155,6 +221,9 @@ const char *lo_address_get_port(lo_address a)
     if (!a) {
         return NULL;
     }
+
+    if (!a->host)
+        lo_address_resolve_source(a);
 
     return a->port;
 }
@@ -179,8 +248,16 @@ char *lo_address_get_url(lo_address a)
 {
     char *buf;
     int ret = 0;
-    int needquote = strchr(a->host, ':') ? 1 : 0;
+    int needquote = 0;
     const char *fmt;
+
+    if (!a->host)
+        lo_address_resolve_source(a);
+
+    if (!a->host)
+		return NULL;
+
+    needquote = strchr(a->host, ':') ? 1 : 0;
 
     if (needquote) {
         fmt = "osc.%s://[%s]:%s/";
@@ -249,6 +326,9 @@ const char *lo_address_errstr(lo_address a)
     if (a->errstr) {
         return a->errstr;
     }
+
+    if (a->errnum == 0)
+        return "Success";
 
     msg = strerror(a->errnum);
     if (msg) {
@@ -343,6 +423,12 @@ char *lo_url_get_port(const char *url)
     if (sscanf(url, "osc.%*[^:]://[%*[^]]]:%[0-9]", port)) {
         return port;
     }
+    if (sscanf(url, "osc://:%[0-9]", port)) {
+        return port;
+    }
+    if (sscanf(url, "osc.%*[^:]://:%[0-9]", port)) {
+        return port;
+    }
 
     /* doesnt look like an OSC URL with port number */
     free(port);
@@ -390,6 +476,25 @@ int lo_address_get_ttl(lo_address t)
     return t->ttl;
 }
 
+int lo_address_set_tcp_nodelay(lo_address t, int enable)
+{
+    int r = (t->flags & LO_NODELAY) != 0;
+    lo_address_set_flags(t, enable
+                         ? t->flags | LO_NODELAY
+                         : t->flags & ~LO_NODELAY);
+    return r;
+}
+
+int lo_address_set_stream_slip(lo_address t, int enable)
+{
+    int r = (t->flags & LO_SLIP) != 0;
+    lo_address_set_flags(t, enable
+                         ? t->flags | LO_SLIP
+                         : t->flags & ~LO_SLIP);
+    return r;
+}
+
+static
 void lo_address_set_flags(lo_address t, int flags)
 {
     if (((t->flags & LO_NODELAY) != (flags & LO_NODELAY))
@@ -397,7 +502,7 @@ void lo_address_set_flags(lo_address t, int flags)
     {
         int option = (t->flags & LO_NODELAY)!=0;
         setsockopt(t->socket, IPPROTO_TCP, TCP_NODELAY,
-                   &option, sizeof(option));
+                   (const char*)&option, sizeof(option));
     }
 
     t->flags = flags;
@@ -428,30 +533,29 @@ void lo_address_copy(lo_address to, lo_address from)
     to->protocol = from->protocol;
     to->ttl = from->ttl;
     to->addr = from->addr;
-    if (from->addr.iface) {
-        free(from->addr.iface);
+    if (from->addr.iface)
         to->addr.iface = strdup(from->addr.iface);
-    }
 }
 
 void lo_address_init_with_sockaddr(lo_address a,
                                    void *sa, size_t sa_len,
                                    int sock, int prot)
 {
-	int err = 0;
-	lo_address_free_mem(a);
-	a->host = malloc(INET_ADDRSTRLEN);
-	a->port = malloc(8);
+    int err = 0;
+    assert(a != NULL);
+    lo_address_free_mem(a);
+    a->host = malloc(INET_ADDRSTRLEN);
+    a->port = malloc(8);
 
-	err = getnameinfo((struct sockaddr *)sa, sa_len,
-					  a->host, INET_ADDRSTRLEN, a->port, 8,
-					  NI_NUMERICHOST | NI_NUMERICSERV);
+    err = getnameinfo((struct sockaddr *)sa, sa_len,
+                      a->host, INET_ADDRSTRLEN, a->port, 8,
+                      NI_NUMERICHOST | NI_NUMERICSERV);
 
-	if (err) {
-		free(a->host);
-		free(a->port);
-		a->host = a->port = 0;
-	}
+    if (err) {
+        free(a->host);
+        free(a->port);
+        a->host = a->port = 0;
+    }
 
     a->socket = sock;
     a->protocol = prot;
@@ -464,7 +568,7 @@ int lo_address_resolve(lo_address a)
     if (a->protocol == LO_UDP || a->protocol == LO_TCP) {
         struct addrinfo *ai;
         struct addrinfo hints;
-        char* host = a->host;
+        const char* host = lo_address_get_hostname(a);
 #ifdef ENABLE_IPV6
         char hosttmp[7+16+1]; // room for ipv6 prefix + a dotted quad
 #endif
@@ -473,10 +577,10 @@ int lo_address_resolve(lo_address a)
 #ifdef ENABLE_IPV6
         hints.ai_family = PF_UNSPEC;
 
-        if (is_dotted_ipv4_address(a->host)) {
+        if (is_dotted_ipv4_address(host)) {
             host = hosttmp;
-            strcpy(host, "::FFFF:");
-            strncpy(host + 7, a->host, 16);
+            strcpy(hosttmp, "::FFFF:");
+            strncpy(hosttmp + 7, lo_address_get_hostname(a), 16);
         }
 #else
         hints.ai_family = PF_INET;
@@ -484,7 +588,7 @@ int lo_address_resolve(lo_address a)
         hints.ai_socktype =
             a->protocol == LO_UDP ? SOCK_DGRAM : SOCK_STREAM;
 
-        if ((ret = getaddrinfo(host, a->port, &hints, &ai))) {
+        if ((ret = getaddrinfo(host, lo_address_get_port(a), &hints, &ai))) {
             a->errnum = ret;
             a->errstr = gai_strerror(ret);
             a->ai = NULL;
@@ -564,8 +668,13 @@ int lo_inaddr_find_iface(lo_inaddr t, int fam,
         if (iface) {
             if (strcmp(iface, aa->AdapterName)==0)
                 found = 1;
-            else if (lstrcmpW(iface, aa->FriendlyName)==0)
-                found = 1;
+            else {
+				WCHAR ifaceW[256];
+				MultiByteToWideChar(CP_ACP, 0, iface, strlen(iface),
+									ifaceW, 256);
+				if (lstrcmpW(ifaceW, aa->FriendlyName)==0)
+					found = 1;
+			}
         }
         if (ip) {
             PIP_ADAPTER_UNICAST_ADDRESS pua = aa->FirstUnicastAddress;

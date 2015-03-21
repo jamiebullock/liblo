@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2004 Steve Harris
+ *  Copyright (C) 2014 Steve Harris et al. (see AUTHORS)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as
@@ -81,18 +81,54 @@ lo_message lo_message_new()
     m->source = NULL;
     m->argv = NULL;
     m->ts = LO_TT_IMMEDIATE;
+    m->refcount = 0;
 
     return m;
 }
 
+void lo_message_incref(lo_message m)
+{
+    m->refcount ++;
+}
+
+lo_message lo_message_clone(lo_message m)
+{
+	lo_message c;
+
+    if (!m) {
+	return NULL;
+    }
+
+    c = malloc(sizeof(struct _lo_message));
+    if (!c) {
+	return NULL;
+    }
+
+    c->types = calloc(m->typesize, sizeof(char));
+    strcpy (c->types, m->types);
+    c->typelen = m->typelen;
+    c->typesize = m->typesize;
+    c->data = calloc(m->datasize, sizeof(uint8_t));
+    memcpy(c->data, m->data, m->datalen);
+    c->datalen = m->datalen;
+    c->datasize = m->datasize;
+    c->source = NULL;
+    c->argv = NULL;
+    c->ts = LO_TT_IMMEDIATE;
+    c->refcount = 0;
+    
+    return c;
+}
+
 void lo_message_free(lo_message m)
 {
-    if (m) {
+    if (m && (--m->refcount) <= 0)
+    {
         free(m->types);
         free(m->data);
         free(m->argv);
+        free(m);
     }
-    free(m);
 }
 
 /* Don't call lo_message_add_varargs_internal directly, use
@@ -204,6 +240,15 @@ int lo_message_add_varargs_internal(lo_message msg, const char *types,
             lo_message_add_infinitum(msg);
             break;
 
+        case '$':
+            if (*types == '$') {
+                // type strings ending in '$$' indicate not to perform
+                // LO_MARKER checking
+                va_end(ap);
+                return 0;
+            }
+            // fall through to unknown type
+
         default:{
                 ret = -1;       // unknown type
                 fprintf(stderr,
@@ -215,7 +260,9 @@ int lo_message_add_varargs_internal(lo_message msg, const char *types,
     }
 #ifndef USE_ANSI_C
     void *i = va_arg(ap, void *);
-    if (i != LO_MARKER_A) {
+    if (((unsigned long)i & 0xFFFFFFFFUL)
+	!= ((unsigned long)LO_MARKER_A & 0xFFFFFFFFUL))
+    {
         ret = -2;               // bad format/args
         fprintf(stderr,
                 "liblo error: lo_send, lo_message_add, or lo_message_add_varargs called with "
@@ -225,7 +272,9 @@ int lo_message_add_varargs_internal(lo_message msg, const char *types,
         return ret;
     }
     i = va_arg(ap, void *);
-    if (i != LO_MARKER_B) {
+    if (((unsigned long)i & 0xFFFFFFFFUL)
+	!= ((unsigned long)LO_MARKER_B & 0xFFFFFFFFUL))
+    {
         ret = -2;               // bad format/args
         fprintf(stderr,
                 "liblo error: lo_send, lo_message_add, or lo_message_add_varargs called with "
@@ -238,7 +287,7 @@ int lo_message_add_varargs_internal(lo_message msg, const char *types,
     return ret;
 }
 
-#ifdef USE_ANSI_C
+#if defined(USE_ANSI_C) || defined(DLL_EXPORT)
 int lo_message_add(lo_message msg, const char *types, ...)
 {
     va_list ap;
@@ -381,6 +430,7 @@ int lo_message_add_char(lo_message m, char a)
     if (!nptr)
         return -1;
 
+    b.i = 0; // zero the 32 bits before writing the char
     b.c = a;
 
     if (lo_message_add_typechar(m, LO_CHAR))
@@ -559,7 +609,8 @@ ssize_t lo_validate_blob(void *data, ssize_t size)
         return -LO_ESIZE;       // invalid size
     }
     dsize = lo_otoh32(*(uint32_t *) data);
-    if (dsize > LO_MAX_MSG_SIZE) {      // avoid int overflow in next step
+    // described size must fit within the buffer
+    if (dsize > size) {      // avoid int overflow in next step
         return -LO_ESIZE;
     }
     end = sizeof(uint32_t) + dsize;     // end of data
@@ -841,6 +892,7 @@ lo_message lo_message_deserialise(void *data, size_t size, int *result)
     msg->source = NULL;
     msg->argv = NULL;
     msg->ts = LO_TT_IMMEDIATE;
+    msg->refcount = 0;
 
     // path
     len = lo_validate_string(data, remain);
@@ -1004,7 +1056,7 @@ void lo_arg_pp_internal(lo_type type, void *data, int bigendian)
         } else {
             printf("%db ", val32.i);
             for (i = 0; i < val32.i; i++) {
-                printf("0x%02x", *((char *) (data) + 4 + i));
+                printf("%#02x", (unsigned int)*((unsigned char *) (data) + 4 + i));
                 if (i + 1 < val32.i)
                     printf(" ");
             }
@@ -1013,7 +1065,7 @@ void lo_arg_pp_internal(lo_type type, void *data, int bigendian)
         break;
 
     case LO_INT64:
-        printf("%lld", (long long int) val64.i);
+        printf("%" PRINTF_LL "d", (long long int) val64.i);
         break;
 
     case LO_TIMETAG:

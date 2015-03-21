@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2004 Steve Harris
+ *  Copyright (C) 2014 Steve Harris et al. (see AUTHORS)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as
@@ -79,6 +79,28 @@ lo_server_thread lo_server_thread_new_with_proto(const char *port,
     return st;
 }
 
+lo_server_thread lo_server_thread_new_from_url(const char *url,
+                                               lo_err_handler err_h)
+{
+    lo_server_thread st = malloc(sizeof(struct _lo_server_thread));
+    st->s = lo_server_new_from_url(url, err_h);
+    st->active = 0;
+    st->done = 0;
+
+    if (!st->s) {
+        free(st);
+
+        return NULL;
+    }
+
+    return st;
+}
+
+void lo_server_thread_set_error_context(lo_server_thread st,
+                                        void *user_data)
+{
+    lo_server_set_error_context(st->s, user_data);
+}
 
 void lo_server_thread_free(lo_server_thread st)
 {
@@ -115,7 +137,7 @@ int lo_server_thread_start(lo_server_thread st)
 
         // Create the server thread
         result =
-            pthread_create(&(st->thread), NULL, (void *) &thread_func, st);
+            pthread_create(&(st->thread), NULL, (void *(*)(void *)) &thread_func, st);
         if (result) {
             fprintf(stderr,
                     "Failed to create thread: pthread_create(), %s",

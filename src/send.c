@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2004 Steve Harris
+ *  Copyright (C) 2014 Steve Harris et al. (see AUTHORS)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as
@@ -24,7 +24,6 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/types.h>
-#include <netinet/tcp.h>
 
 #if defined(WIN32) || defined(_MSC_VER)
 #include <io.h>
@@ -38,6 +37,7 @@
 #include <sys/ioctl.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <netinet/tcp.h>
 #endif
 
 #include "lo_types_internal.h"
@@ -96,7 +96,7 @@ int lo_send_varargs_internal(lo_address t, const char *file,
     return ret;
 }
 
-#ifdef USE_ANSI_C
+#if defined(USE_ANSI_C) || defined(DLL_EXPORT)
 int lo_send(lo_address t, const char *path, const char *types, ...)
 {
     const char *file = "";
@@ -145,7 +145,7 @@ int lo_send_timestamped_varargs_internal(lo_address t, const char *file,
 }
 
 
-#ifdef USE_ANSI_C
+#if defined(USE_ANSI_C) || defined(DLL_EXPORT)
 int lo_send_timestamped(lo_address t, lo_timetag ts,
                         const char *path, const char *types, ...)
 {
@@ -206,7 +206,7 @@ int lo_send_from_varargs_internal(lo_address to, lo_server from,
     return ret;
 }
 
-#ifdef USE_ANSI_C
+#if defined(USE_ANSI_C) || defined(DLL_EXPORT)
 int lo_send_from(lo_address to, lo_server from, lo_timetag ts,
                  const char *path, const char *types, ...)
 {
@@ -336,8 +336,8 @@ static int create_socket(lo_address a)
             if (ip[0] == 255 && ip[1] == 255 && ip[2] == 255
                 && ip[3] == 255) {
                 int opt = 1;
-                setsockopt(a->socket, SOL_SOCKET, SO_BROADCAST, &opt,
-                           sizeof(int));
+                setsockopt(a->socket, SOL_SOCKET, SO_BROADCAST,
+						   (const char*)&opt, sizeof(int));
             }
         }
 
@@ -384,7 +384,7 @@ static int create_socket(lo_address a)
     if (a->flags & LO_NODELAY) {
         int option = 1;
         setsockopt(a->socket, IPPROTO_TCP, TCP_NODELAY,
-        &option, sizeof(option));
+				   (const char*)&option, sizeof(option));
     }
 #endif
     
@@ -435,7 +435,7 @@ static int send_data(lo_address a, lo_server from, char *data,
         return -1;
 #endif
 
-    if (data_len > LO_MAX_MSG_SIZE) {
+    if (a->protocol == LO_UDP && data_len > LO_MAX_UDP_MSG_SIZE) {
         a->errnum = 99;
         a->errstr = "Attempted to send message in excess of maximum "
             "message size";
@@ -477,7 +477,7 @@ static int send_data(lo_address a, lo_server from, char *data,
     if (a->protocol == LO_TCP && !(a->flags & LO_SLIP)) {
         // For TCP only, send the length of the following data
         int32_t size = htonl(data_len);
-        ret = send(sock, &size, sizeof(size), MSG_NOSIGNAL);
+        ret = send(sock, (const void*)&size, sizeof(size), MSG_NOSIGNAL);
     }
     // Send the data
     if (ret != -1) {
@@ -485,22 +485,21 @@ static int send_data(lo_address a, lo_server from, char *data,
             struct addrinfo* ai;
             if (a->addr.size == sizeof(struct in_addr)) {
                 setsockopt(sock, IPPROTO_IP, IP_MULTICAST_IF,
-                           &a->addr.a, a->addr.size);
+                           (const char*)&a->addr.a, a->addr.size);
             }
 #ifdef ENABLE_IPV6
             else if (a->addr.size == sizeof(struct in6_addr)) {
                 setsockopt(sock, IPPROTO_IP, IPV6_MULTICAST_IF,
-                           &a->addr.a, a->addr.size);
+                           (const char*)&a->addr.a, a->addr.size);
             }
 #endif
             if (a->ttl >= 0) {
                 unsigned char ttl = (unsigned char) a->ttl;
-                setsockopt(sock, IPPROTO_IP, IP_MULTICAST_TTL, &ttl,
-                           sizeof(ttl));
+                setsockopt(sock, IPPROTO_IP, IP_MULTICAST_TTL,
+						   (const char*)&ttl, sizeof(ttl));
             }
 
             ai = a->ai;
-            ret = -1;
 
             do {
                 ret = sendto(sock, data, data_len, MSG_NOSIGNAL,
@@ -511,7 +510,6 @@ static int send_data(lo_address a, lo_server from, char *data,
                 a->ai = ai;
         } else {
             struct addrinfo* ai = a->ai;
-            ret = -1;
 
             size_t len = data_len;
             if (a->flags & LO_SLIP)
@@ -587,8 +585,8 @@ int lo_send_bundle(lo_address a, lo_bundle b)
 
 int lo_send_bundle_from(lo_address a, lo_server from, lo_bundle b)
 {
-    const size_t data_len = lo_bundle_length(b);
-    char *data = lo_bundle_serialise(b, NULL, NULL);
+    size_t data_len;
+    char *data = lo_bundle_serialise(b, NULL, &data_len);
 
     // Send the bundle
     int ret = send_data(a, from, data, data_len);

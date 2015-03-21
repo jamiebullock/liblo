@@ -31,6 +31,11 @@
         description = "Disable lo_server_thread functions, no need for pthread."
 }
 
+    newoption {
+        trigger     = "pthreads",
+	description = "Specify the location of the pthreads-w32 library."
+    }
+
     includedirs {
       "../lo",
       "../src"
@@ -79,8 +84,14 @@
   io.input("../configure.ac")
   text = io.read("*all")
   io.close()
-  text = string.sub(text,string.find(text, "AC_INIT.+"))
-  version = string.sub(text,string.find(text, "%d+%.%d+"))
+
+  version = string.match(text, "AC_INIT%(%[liblo%],%[(%d+%.%d+%w+)%]")
+
+  ltcurrent = string.match(text, "m4_define%(%[lt_current%], (%d+)")
+  ltrev = string.match(text, "m4_define%(%[lt_revision%], (%d+)")
+  ltage = string.match(text, "m4_define%(%[lt_age%], (%d+)")
+
+  ltversion = '{' .. ltcurrent .. ', ' .. ltrev .. ', ' .. ltage .. '}'
 
 -- Replace it in "config.h" --
 
@@ -88,6 +99,14 @@
   local text = io.read("*all")
 
   text = string.gsub(text, '/%*VERSION%*/', '"'..version..'"')
+
+  if _OPTIONS["without-threads"] then
+    text = string.gsub(text, '@DEFTHREADS@', '// ')
+  else
+    text = string.gsub(text, '@DEFTHREADS@', '')
+  end
+
+  text = string.gsub(text, '@LO_SO_VERSION@', ltversion)
 
   io.output("../config.h")
   io.write(text)
@@ -106,7 +125,26 @@
     text = string.gsub(text, '@DEFTHREADS@', '')
   end
 
+  text = string.gsub(text, ' @DLL_NAME@', '')
+
   io.output("../src/liblo.def")
+  io.write(text)
+  io.close()
+
+----------------------------------------------------------------------
+-- Write a custom <lo.h> to ../lo/
+----------------------------------------------------------------------
+
+  io.input("../lo/lo.h.in")
+  local text = io.read("*all")
+
+  if _OPTIONS["without-threads"] then
+    text = string.gsub(text, '@ENABLE_THREADS@', '0')
+  else
+    text = string.gsub(text, '@ENABLE_THREADS@', '1')
+  end
+
+  io.output("../lo/lo.h")
   io.write(text)
   io.close()
 
@@ -159,6 +197,9 @@
 
     configuration { "not without-threads" }
       links { "pthreadVC2" }
+      if (_OPTIONS["pthreads"]) then
+        includedirs { _OPTIONS["pthreads"] }
+      end
 
     configuration { "*Lib" }
       kind    "StaticLib"
@@ -187,6 +228,7 @@
     links   { "user32",
               "wsock32",
               "ws2_32",
+              "iphlpapi",
               "pthreadVC2",
             }
 
@@ -209,6 +251,12 @@
     configuration { "Release*" }
       links { "liblo" }
 
+    configuration { "not without-threads" }
+      links { "pthreadVC2" }
+      if (_OPTIONS["pthreads"]) then
+        includedirs { _OPTIONS["pthreads"] }
+      end
+
   project "subtest"
   
     kind     "ConsoleApp"
@@ -216,6 +264,7 @@
     links   { "user32",
               "wsock32",
               "ws2_32",
+              "iphlpapi",
               "pthreadVC2",
             }
 
